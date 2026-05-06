@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Docxtract — Document Intelligence Pipeline</title>
+    <meta name="description" content="Extract structured data from business cards, resumes, and medical reports using NLP.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <svg class="logo-icon" width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <rect x="2" y="4" width="18" height="22" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/>
+                    <rect x="8" y="2" width="18" height="22" rx="2" stroke="currentColor" stroke-width="1.8" fill="var(--bg-primary)"/>
+                    <line x1="12" y1="8" x2="22" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="12" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="12" y1="16" x2="18" y2="16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span class="logo-text">Docxtract</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#upload" class="nav-link active" data-view="upload" id="nav-upload">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <path d="M9 13V3M9 3L5 7M9 3L13 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 12V14C2 15.1 2.9 16 4 16H14C15.1 16 16 15.1 16 14V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span>Upload</span>
+            </a>
+            <a href="#documents" class="nav-link" data-view="documents" id="nav-documents">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <rect x="2" y="2" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                    <rect x="10" y="2" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                    <rect x="2" y="10" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                    <rect x="10" y="10" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                <span>Documents</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="pipeline-status">
+                <span class="status-dot" id="pipeline-dot"></span>
+                <span class="status-text" id="pipeline-status-text">Pipeline Ready</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+        <!-- ===== Upload View ===== -->
+        <section id="view-upload" class="view active">
+            <div class="view-header">
+                <h1>Upload a document</h1>
+                <p class="subtitle">Drop your business cards, resumes, or medical reports below.<br>We'll extract the structured data for you.</p>
+            </div>
+
+            <div class="upload-section">
+                <div class="upload-zone" id="upload-zone">
+                    <div class="upload-zone-content">
+                        <svg class="upload-icon" width="48" height="48" viewBox="0 0 48 48" fill="none">
+                            <path d="M24 32V8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M16 16L24 8L32 16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M8 28V36C8 38.2 9.8 40 12 40H36C38.2 40 40 38.2 40 36V28" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                        <p class="upload-text">Drag & drop your file here</p>
+                        <p class="upload-hint">or click to browse &middot; PDF, DOCX, TXT</p>
+                    </div>
+                    <input type="file" id="file-input" accept=".pdf,.docx,.txt,.doc" hidden>
+                </div>
+
+                <div class="doc-type-selector" id="doc-type-selector" style="display: none;">
+                    <p class="selector-label">What type of document is this?</p>
+                    <div class="type-chips">
+                        <button class="type-chip" data-type="business_card">
+                            <span class="chip-icon">🪪</span>
+                            <span>Business Card</span>
+                        </button>
+                        <button class="type-chip" data-type="resume">
+                            <span class="chip-icon">📄</span>
+                            <span>Resume</span>
+                        </button>
+                        <button class="type-chip" data-type="medical_report">
+                            <span class="chip-icon">🏥</span>
+                            <span>Medical Report</span>
+                        </button>
+                    </div>
+                    <div class="selected-file-info" id="selected-file-info"></div>
+                    <button class="btn btn-primary" id="upload-btn" disabled>Upload & Process</button>
+                    <button class="btn btn-ghost" id="cancel-upload-btn">Cancel</button>
+                </div>
+            </div>
+
+            <!-- Recent uploads -->
+            <div class="recent-section" id="recent-section" style="display: none;">
+                <h2 class="section-title">Recent uploads</h2>
+                <div class="recent-list" id="recent-list"></div>
+            </div>
+        </section>
+
+        <!-- ===== Documents View ===== -->
+        <section id="view-documents" class="view">
+            <div class="view-header">
+                <h1>Your documents</h1>
+                <p class="subtitle">All processed and pending documents in one place.</p>
+            </div>
+
+            <div class="documents-toolbar">
+                <div class="filter-chips">
+                    <button class="filter-chip active" data-filter="all">All</button>
+                    <button class="filter-chip" data-filter="business_card">Business Cards</button>
+                    <button class="filter-chip" data-filter="resume">Resumes</button>
+                    <button class="filter-chip" data-filter="medical_report">Medical Reports</button>
+                </div>
+            </div>
+
+            <div class="documents-grid" id="documents-grid">
+                <div class="empty-state" id="empty-state">
+                    <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                        <rect x="12" y="8" width="40" height="48" rx="4" stroke="currentColor" stroke-width="2" stroke-dasharray="4 4"/>
+                        <line x1="22" y1="22" x2="42" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.4"/>
+                        <line x1="22" y1="30" x2="38" y2="30" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+                        <line x1="22" y1="38" x2="34" y2="38" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.2"/>
+                    </svg>
+                    <p>No documents yet</p>
+                    <a href="#upload" class="btn btn-ghost">Upload your first document</a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Document Detail View ===== -->
+        <section id="view-detail" class="view">
+            <div class="detail-header">
+                <button class="btn btn-ghost btn-back" id="back-btn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Back
+                </button>
+                <div class="detail-title-row">
+                    <h1 id="detail-filename">Document</h1>
+                    <span class="status-badge" id="detail-status">completed</span>
+                </div>
+                <div class="detail-meta" id="detail-meta"></div>
+            </div>
+
+            <div class="detail-panels">
+                <!-- Left: Original Text -->
+                <div class="panel panel-text">
+                    <div class="panel-header">
+                        <h3>Original Text</h3>
+                    </div>
+                    <pre class="panel-body" id="detail-raw-text">No text extracted yet.</pre>
+                </div>
+
+                <!-- Right: Extracted Data -->
+                <div class="panel panel-data">
+                    <div class="panel-header">
+                        <h3>Extracted Data</h3>
+                    </div>
+                    <div class="panel-body" id="detail-extracted-data">
+                        <p class="text-muted">No data extracted yet.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+        <p id="loading-text">Processing...</p>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
