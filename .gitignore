@@ -11,3 +11,4 @@ data/*.sqlite
 .idea/
 *.log
 .pytest_cache/
+.claude/

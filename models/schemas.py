@@ -31,6 +31,10 @@ class DocumentResponse(BaseModel):
     raw_text: Optional[str] = None
     extracted_data: Optional[Dict[str, Any]] = None
     confidence_scores: Optional[Dict[str, float]] = None
+    issues: Optional[List[str]] = None
+    missing_required: Optional[List[str]] = None
+    language: Optional[str] = None
+    used_ocr: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime
     processed_at: Optional[datetime] = None
@@ -45,6 +49,46 @@ class StatusResponse(BaseModel):
     """Generic acknowledgement response."""
     status: str
     document_id: int
+
+
+class ReviewQueueItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    doc_type: str
+    status: str
+    extracted_data: Optional[Dict[str, Any]] = None
+    confidence_scores: Optional[Dict[str, float]] = None
+    issues: Optional[List[str]] = None
+    missing_required: Optional[List[str]] = None
+    created_at: datetime
+
+
+class ReviewQueueResponse(BaseModel):
+    items: List[ReviewQueueItem]
+    total: int
+
+
+class ApproveRequest(BaseModel):
+    """Payload for human-in-the-loop approval / correction."""
+    extracted_data: Optional[Dict[str, Any]] = None  # if None, approve as-is
+
+
+class AuditLogEntry(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_id: Optional[int] = None
+    event_type: str
+    actor: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+
+class AuditLogResponse(BaseModel):
+    events: List[AuditLogEntry]
+    total: int
 
 
 # ---------------------------------------------------------------------------

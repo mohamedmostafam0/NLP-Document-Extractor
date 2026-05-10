@@ -40,7 +40,11 @@ class Settings:
 
     # Upload constraints
     MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "20"))
-    ALLOWED_EXTENSIONS: set = {"pdf", "docx", "doc", "txt"}
+    ALLOWED_EXTENSIONS: set = {
+        "pdf", "docx", "doc", "txt",
+        # images (OCR)
+        "png", "jpg", "jpeg", "tiff", "bmp", "webp",
+    }
 
     @property
     def max_upload_bytes(self) -> int:

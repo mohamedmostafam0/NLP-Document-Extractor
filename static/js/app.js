@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     views = {
         upload: document.getElementById('view-upload'),
         documents: document.getElementById('view-documents'),
+        review: document.getElementById('view-review'),
         detail: document.getElementById('view-detail'),
     };
     navLinks = document.querySelectorAll('.nav-link');
@@ -94,6 +95,7 @@ function handleRoute() {
         switchView(hash);
         if (hash === 'documents') loadDocuments();
         if (hash === 'upload') loadDocuments(); // refresh recent list
+        if (hash === 'review') loadReviewQueue();
     } else {
         switchView('upload');
     }
@@ -137,10 +139,10 @@ function initUploadZone() {
 
 function handleFileSelected(file) {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const allowedExts = ['pdf', 'txt', 'docx', 'doc'];
+    const allowedExts = ['pdf', 'txt', 'docx', 'doc', 'png', 'jpg', 'jpeg', 'tiff', 'bmp', 'webp'];
 
     if (!allowedExts.includes(ext)) {
-        showToast('Unsupported file format. Please use PDF, DOCX, or TXT.', 'error');
+        showToast('Unsupported file format. Use PDF, DOCX, TXT, or an image.', 'error');
         return;
     }
 
@@ -207,7 +209,20 @@ function initButtons() {
     document.getElementById('back-btn').addEventListener('click', () => {
         window.location.hash = '#documents';
     });
+
+    // Detail-view actions — handlers are bound once and read currentDocId
+    document.getElementById('export-json-btn').addEventListener('click', () => {
+        if (currentDocId) downloadExport(currentDocId, 'json');
+    });
+    document.getElementById('export-csv-btn').addEventListener('click', () => {
+        if (currentDocId) downloadExport(currentDocId, 'csv');
+    });
+    document.getElementById('approve-btn').addEventListener('click', () => {
+        if (currentDocId) approveDocument(currentDocId);
+    });
 }
+
+let currentDocId = null;
 
 function resetUploadState() {
     selectedFile = null;
@@ -284,6 +299,7 @@ async function loadDocuments() {
         documents = data.documents || [];
         renderDocuments();
         renderRecentUploads();
+        updateReviewBadge(documents.filter(d => d.status === 'needs_review').length);
     } catch {
         // Silently fail on first load (API may not be ready yet)
         documents = [];
@@ -380,6 +396,7 @@ function renderRecentUploads() {
 }
 
 function renderDetail(doc) {
+    currentDocId = doc.id;
     document.getElementById('detail-filename').textContent = doc.filename;
 
     const statusBadge = document.getElementById('detail-status');
@@ -406,6 +423,111 @@ function renderDetail(doc) {
     } else {
         dataEl.innerHTML = '<p class="text-muted">No structured data extracted yet.</p>';
     }
+
+    // Approve button — only shown for needs_review docs
+    const approveBtn = document.getElementById('approve-btn');
+    approveBtn.style.display = (doc.status === 'needs_review') ? 'inline-flex' : 'none';
+
+    // Issues banner
+    const banner = document.getElementById('issues-banner');
+    const issues = doc.issues || [];
+    const missing = doc.missing_required || [];
+    if (issues.length || missing.length) {
+        let html = '<h4>This document needs review</h4><ul>';
+        for (const m of missing) html += `<li>Missing required field: <strong>${escapeHtml(m)}</strong></li>`;
+        for (const i of issues) html += `<li>${escapeHtml(i)}</li>`;
+        html += '</ul>';
+        banner.innerHTML = html;
+        banner.style.display = 'block';
+    } else {
+        banner.style.display = 'none';
+    }
+}
+
+// ====================================================================
+// Review queue
+// ====================================================================
+
+async function loadReviewQueue() {
+    try {
+        const res = await fetch(`${API}/review-queue`);
+        if (!res.ok) throw new Error('Failed to load review queue');
+        const data = await res.json();
+        renderReviewQueue(data.items || []);
+        updateReviewBadge(data.total || 0);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function renderReviewQueue(items) {
+    const grid = document.getElementById('review-grid');
+    const empty = document.getElementById('review-empty');
+
+    if (items.length === 0) {
+        grid.innerHTML = '';
+        grid.appendChild(empty);
+        empty.style.display = 'block';
+        return;
+    }
+
+    empty.style.display = 'none';
+    grid.innerHTML = items.map(item => {
+        const missingHtml = (item.missing_required || []).map(m =>
+            `<span class="status-badge needs_review">missing: ${escapeHtml(m)}</span>`
+        ).join(' ');
+        return `
+            <div class="doc-card" onclick="window.location.hash='#detail/${item.id}'">
+                <div class="doc-card-header">
+                    <div>
+                        <div class="doc-card-name">${escapeHtml(item.filename)}</div>
+                        <div class="doc-card-type">${TYPE_LABELS[item.doc_type] || item.doc_type}</div>
+                    </div>
+                    <div class="doc-card-icon ${escapeHtml(item.doc_type)}">
+                        ${TYPE_ICONS[item.doc_type] || '📋'}
+                    </div>
+                </div>
+                <div class="doc-card-footer" style="flex-wrap:wrap;gap:6px;">
+                    ${missingHtml || '<span class="status-badge needs_review">low confidence</span>'}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateReviewBadge(count) {
+    const badge = document.getElementById('review-badge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = String(count);
+        badge.style.display = 'inline-block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+async function approveDocument(docId) {
+    try {
+        const res = await fetch(`${API}/documents/${docId}/approve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),  // approve as-is
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Approve failed');
+        }
+        showToast('Document approved', 'success');
+        await loadDocumentDetail(docId);
+        await loadReviewQueue();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function downloadExport(docId, format) {
+    // Browser handles the download via Content-Disposition
+    window.location.href = `${API}/documents/${docId}/export?format=${format}`;
 }
 
 function renderExtractedData(data, confidences) {
