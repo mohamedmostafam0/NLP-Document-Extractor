@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings, BASE_DIR
 from models.database import create_tables
 from routers.documents import router as documents_router
+from routers.progress import router as progress_router
 
 logger = logging.getLogger("docxtract.app")
 
@@ -41,13 +42,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 # Static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# API router
+# API routers
 app.include_router(documents_router, prefix="/api")
+app.include_router(progress_router, prefix="/api")
 
 
 # --- Global exception handler ---

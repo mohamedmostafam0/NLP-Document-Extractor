@@ -17,6 +17,7 @@ from extractors.ner import extract_entities as run_ner
 from extractors.patterns import extract_patterns as run_patterns
 from utils.money import normalize_money
 
+from routers.progress import set_phase
 from . import ingestion, mapping, preprocessing, validation
 
 logger = logging.getLogger("docxtract.orchestrator")
@@ -67,10 +68,15 @@ def _normalize_entities_in_place(entities: List[Entity]) -> None:
             pass
 
 
-def run(file_bytes: bytes, filename: str, doc_type: str) -> PipelineResult:
+def run(file_bytes: bytes, filename: str, doc_type: str, doc_id: int | None = None) -> PipelineResult:
     logger.info("Starting pipeline for %s (%s)", filename, doc_type)
 
+    def _emit(phase: str, detail: str = "", status: str = "active") -> None:
+        if doc_id is not None:
+            set_phase(doc_id, phase, status=status, detail=detail)
+
     # Phase 1 — ingest
+    _emit("ingestion", "Extracting text from document…")
     ingested = ingestion.ingest(file_bytes, filename)
     logger.info(
         "Phase 1 done: %d chars, format=%s, ocr=%s",
@@ -86,6 +92,7 @@ def run(file_bytes: bytes, filename: str, doc_type: str) -> PipelineResult:
         )
 
     # Phase 2 — preprocess
+    _emit("preprocessing", "Cleaning text & detecting language…")
     pre = preprocessing.preprocess(ingested.text)
     logger.info(
         "Phase 2 done: language=%s, sentences=%d, dupes_removed=%d",
@@ -93,12 +100,14 @@ def run(file_bytes: bytes, filename: str, doc_type: str) -> PipelineResult:
     )
 
     # Phase 3 — NER + patterns (run on cleaned text)
+    _emit("extraction", "Running NER & pattern matching…")
     ner_result = run_ner(pre.cleaned_text)
     pattern_result = run_patterns(pre.cleaned_text)
     combined = ExtractionResult(entities=ner_result.entities + pattern_result.entities)
     logger.info("Phase 3 done: %d entities", len(combined.entities))
 
     # Phase 4 — schema mapping & normalization
+    _emit("mapping", "Mapping entities to structured fields…")
     mapped = mapping.map_to_schema(combined, doc_type, pre.cleaned_text)
     _normalize_entities_in_place(combined.entities)
     logger.info(
@@ -107,6 +116,7 @@ def run(file_bytes: bytes, filename: str, doc_type: str) -> PipelineResult:
     )
 
     # Phase 5 — validate & QC
+    _emit("validation", "Running quality checks…")
     validated = validation.validate(mapped.data, mapped.confidence_scores, doc_type)
     logger.info(
         "Phase 5 done: valid=%s, needs_review=%s, issues=%d",
@@ -118,6 +128,8 @@ def run(file_bytes: bytes, filename: str, doc_type: str) -> PipelineResult:
         else "completed" if validated.is_valid
         else "completed"  # not strictly invalid → still let it through
     )
+
+    _emit("done", f"Pipeline finished — {status}")
 
     return PipelineResult(
         raw_text=ingested.text,

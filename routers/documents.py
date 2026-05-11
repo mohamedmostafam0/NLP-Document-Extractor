@@ -20,12 +20,14 @@ from models.schemas import (
     AuditLogResponse,
     DocumentListResponse,
     DocumentResponse,
+    DocumentUpdateRequest,
     DocumentUploadResponse,
     ReviewQueueItem,
     ReviewQueueResponse,
     StatusResponse,
 )
 from pipeline.orchestrator import run as run_pipeline
+from routers.progress import set_phase
 from services.storage import get_storage
 
 logger = logging.getLogger("docxtract.api")
@@ -123,6 +125,8 @@ async def upload_document(
     })
     db.commit()
 
+    set_phase(doc.id, "upload", status="completed", detail="File stored successfully")
+
     logger.info("Uploaded document id=%d filename=%s type=%s", doc.id, safe_name, doc_type)
     return DocumentUploadResponse.model_validate(doc)
 
@@ -155,6 +159,27 @@ async def get_document(doc_id: int, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
+# Update — manual edit
+# ---------------------------------------------------------------------------
+
+@router.patch("/documents/{doc_id}", response_model=DocumentResponse)
+async def update_document(doc_id: int, req: DocumentUpdateRequest, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+        
+    doc.extracted_data = req.extracted_data
+    if req.approve:
+        doc.status = "completed"
+        doc.issues = None
+        doc.missing_required = None
+        
+    db.commit()
+    db.refresh(doc)
+    return DocumentResponse.model_validate(doc)
+
+
+# ---------------------------------------------------------------------------
 # Process — runs the full pipeline
 # ---------------------------------------------------------------------------
 
@@ -175,7 +200,7 @@ async def process_document(doc_id: int, db: Session = Depends(get_db)):
 
         # Run the full pipeline. This is sync today — fine for small files;
         # later we'd hand it to a worker queue.
-        result = run_pipeline(file_data, doc.filename, doc.doc_type)
+        result = run_pipeline(file_data, doc.filename, doc.doc_type, doc_id=doc.id)
 
         doc.raw_text = result.raw_text
         doc.extracted_data = result.extracted_data

@@ -40,6 +40,11 @@ class DocumentResponse(BaseModel):
     processed_at: Optional[datetime] = None
 
 
+class DocumentUpdateRequest(BaseModel):
+    extracted_data: Dict[str, Any]
+    approve: bool = False
+
+
 class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
     total: int
@@ -122,6 +127,7 @@ class ResumeData(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    location: Optional[str] = None
     education: Optional[List[EducationEntry]] = None
     experience: Optional[List[ExperienceEntry]] = None
     skills: Optional[List[str]] = None

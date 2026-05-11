@@ -106,11 +106,11 @@ _SKILL_SECTION_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _EDUCATION_SECTION_RE = re.compile(
-    r"(?:^|\n)\s*education\s*[:\n]+(?P<body>.+?)(?=\n\s*\n[A-Z][a-z]+|\Z)",
+    r"(?:^|\n)\s*education\s*\n(?P<body>.+?)(?=\n\s*(?:technical\s+skills|skills|professional\s+experience|experience|work\s+history|employment|projects|certifications|courses|publications|interests|references|$))",
     re.IGNORECASE | re.DOTALL,
 )
 _EXPERIENCE_SECTION_RE = re.compile(
-    r"(?:^|\n)\s*(?:experience|work history|employment)\s*[:\n]+(?P<body>.+?)(?=\n\s*\n[A-Z][a-z]+|\Z)",
+    r"(?:^|\n)\s*(?:professional\s+)?(?:experience|work\s*history|employment)\s*\n(?P<body>.+?)(?=\n\s*(?:education|projects|skills|technical\s+skills|certifications|courses|publications|interests|references|$))",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -119,9 +119,28 @@ def _map_resume(extraction: ExtractionResult, text: str) -> MappingResult:
     data: Dict[str, Any] = {}
     confs: Dict[str, float] = {}
 
-    if name := extraction.best_of_type("PERSON"):
-        data["name"] = name.value
-        confs["name"] = name.confidence
+    # Strong Heuristic for Name: Resumes almost always start with the candidate's name.
+    # SpaCy NER often fails on names that are ALL CAPS or have strange spacing.
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    first_line = lines[0] if lines else ""
+    if first_line and len(first_line.split()) <= 5 and not re.search(r'\d|@', first_line):
+        data["name"] = first_line.title()
+        confs["name"] = 0.9
+    else:
+        # Fallback to NER
+        persons = extraction.of_type("PERSON")
+        if persons:
+            top_persons = [p for p in persons if p.start >= 0 and p.start < 200]
+            if top_persons:
+                name_ent = max(top_persons, key=lambda e: (len(e.value), e.confidence))
+            else:
+                with_pos = [p for p in persons if p.start >= 0]
+                if with_pos:
+                    name_ent = min(with_pos, key=lambda e: e.start)
+                else:
+                    name_ent = max(persons, key=lambda e: (len(e.value), e.confidence))
+            data["name"] = name_ent.value
+            confs["name"] = name_ent.confidence
 
     if email := extraction.best_of_type("EMAIL"):
         data["email"] = email.value.lower()
@@ -130,6 +149,24 @@ def _map_resume(extraction: ExtractionResult, text: str) -> MappingResult:
     if phone := extraction.best_of_type("PHONE"):
         data["phone"] = _normalize_phone(phone.value)
         confs["phone"] = phone.confidence
+
+    # Location — useful for resumes
+    locations = extraction.of_type("LOCATION")
+    if locations:
+        # Prefer locations in the header (first 300 characters)
+        header_locations = [loc for loc in locations if loc.start >= 0 and loc.start < 300]
+        if header_locations:
+            data["location"] = header_locations[0].value
+            confs["location"] = header_locations[0].confidence
+        else:
+            # If no header location, check if there's an address-like pattern near the top
+            addr_match = re.search(r'\b([A-Za-z\s]+(?:WA|NSW|VIC|QLD|SA|TAS|ACT|NT|[A-Z]{2})\s+\d{4,5})\b', text[:500])
+            if addr_match:
+                data["location"] = addr_match.group(1).strip()
+                confs["location"] = 0.8
+            else:
+                data["location"] = locations[0].value
+                confs["location"] = locations[0].confidence
 
     skills = _extract_skills_section(text)
     if skills:
@@ -144,7 +181,7 @@ def _map_resume(extraction: ExtractionResult, text: str) -> MappingResult:
     experience = _extract_experience_section(text, extraction)
     if experience:
         data["experience"] = experience
-        confs["experience"] = 0.55
+        confs["experience"] = 0.6
 
     return MappingResult(data=data, confidence_scores=confs, entities=extraction.entities)
 
@@ -166,24 +203,77 @@ def _extract_education_section(text: str, extraction: ExtractionResult) -> List[
         return []
     body = m.group("body").strip()
     entries: List[Dict[str, str]] = []
+
+    # Known ORG entities for matching
+    org_values = {ent.value for ent in extraction.of_type("ORG")}
+
+    # Parse line by line, grouping institution + degree
+    current_entry: Dict[str, str] | None = None
     for line in body.splitlines():
         line = line.strip(" -·•\t")
         if len(line) < 5:
             continue
-        # Year regex
+
+        # Detect year patterns like "2026", "Graduating 2026", "2020 – 2024"
         year_m = re.search(r"\b(19|20)\d{2}\b", line)
-        entry: Dict[str, str] = {"raw": line}
-        if year_m:
-            entry["year"] = year_m.group(0)
-        # Institution heuristic — first ORG mention on this line
-        for ent in extraction.of_type("ORG"):
-            if ent.value in line:
-                entry["institution"] = ent.value
+
+        # Check if this line mentions a known ORG (institution)
+        matched_org = None
+        for org in org_values:
+            if org in line and len(org) > 3:  # skip very short ORG names
+                matched_org = org
                 break
-        entries.append(entry)
+
+        # Detect degree keywords
+        degree_m = re.search(
+            r"\b(?:Bachelor|Master|Doctor|Ph\.?D|M\.?S|B\.?S|B\.?A|M\.?A|M\.?B\.?A|Associate|Diploma|Certificate)"
+            r"(?:\s+of\s+[A-Za-z\s]+)?",
+            line, re.IGNORECASE,
+        )
+
+        # If line looks like an institution header (has an ORG and/or degree)
+        if matched_org or degree_m:
+            if degree_m and current_entry and "institution" in current_entry and "degree" not in current_entry:
+                # This is a degree line for the previous institution
+                current_entry["degree"] = degree_m.group(0).strip()
+                if year_m:
+                    current_entry["year"] = year_m.group(0)
+            elif matched_org:
+                # New institution entry
+                if current_entry:
+                    entries.append(current_entry)
+                current_entry = {"institution": matched_org}
+                if degree_m:
+                    current_entry["degree"] = degree_m.group(0).strip()
+                if year_m:
+                    current_entry["year"] = year_m.group(0)
+            elif degree_m:
+                # Degree line without matched org — start a new entry
+                if current_entry:
+                    entries.append(current_entry)
+                current_entry = {"degree": degree_m.group(0).strip()}
+                if year_m:
+                    current_entry["year"] = year_m.group(0)
+        elif year_m and current_entry and "year" not in current_entry:
+            current_entry["year"] = year_m.group(0)
+
         if len(entries) >= 6:
             break
-    return entries
+
+    if current_entry:
+        entries.append(current_entry)
+
+    return entries[:6]
+
+
+# Regex to detect a role/company header line in experience sections.
+# Matches patterns like "Company Name  City, Country" or lines with date ranges.
+_DATE_RANGE_RE = re.compile(
+    r"(?:\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}"
+    r"|\b(?:19|20)\d{2})\s*[-–—to]+\s*(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}"
+    r"|(?:19|20)\d{2}|[Pp]resent|[Cc]urrent)",
+    re.IGNORECASE,
+)
 
 
 def _extract_experience_section(text: str, extraction: ExtractionResult) -> List[Dict[str, str]]:
@@ -192,23 +282,66 @@ def _extract_experience_section(text: str, extraction: ExtractionResult) -> List
         return []
     body = m.group("body").strip()
     entries: List[Dict[str, str]] = []
+
+    org_values = {ent.value for ent in extraction.of_type("ORG")}
+    current_entry: Dict[str, str] | None = None
+    bullets: List[str] = []
+
     for line in body.splitlines():
-        line = line.strip(" -·•\t")
-        if len(line) < 5:
+        stripped = line.strip(" -·•\t")
+        if len(stripped) < 3:
             continue
-        entry: Dict[str, str] = {"raw": line}
-        for ent in extraction.of_type("ORG"):
-            if ent.value in line:
-                entry["company"] = ent.value
+
+        # Check if this is a company/role header line
+        matched_org = None
+        for org in org_values:
+            if org in stripped and len(org) > 3:
+                matched_org = org
                 break
-        # Date range
-        date_m = re.search(r"\b(19|20)\d{2}\b\s*[-–to]+\s*(?:\b(19|20)\d{2}\b|present)", line, re.IGNORECASE)
-        if date_m:
-            entry["dates"] = date_m.group(0)
-        entries.append(entry)
+
+        date_m = _DATE_RANGE_RE.search(stripped)
+
+        # Detect job title patterns
+        title_m = re.search(
+            r"\b(?:(?:Senior|Junior|Lead|Principal|Staff|Chief|Head)\s+)?"
+            r"(?:Software|Data|Frontend|Backend|Full[- ]?Stack|DevOps|Cloud|ML|AI|IT|QA)\s+"
+            r"(?:Engineer|Developer|Architect|Analyst|Scientist|Consultant|Manager|Intern|Trainee)"
+            r"|\b(?:Founder|Co-Founder|CTO|CEO|VP|Director|Manager|Intern|Trainee)\b",
+            stripped, re.IGNORECASE,
+        )
+
+        is_header = matched_org or (date_m and not stripped.startswith("Built") and not stripped.startswith("Designed"))
+        is_bullet = line.lstrip().startswith("•") or line.lstrip().startswith("-") or line.startswith("  ")
+
+        if is_header and not is_bullet:
+            # Save previous entry
+            if current_entry:
+                if bullets:
+                    current_entry["description"] = " ".join(bullets[:3])
+                entries.append(current_entry)
+                bullets = []
+
+            current_entry = {}
+            if matched_org:
+                current_entry["company"] = matched_org
+            if title_m:
+                current_entry["title"] = title_m.group(0).strip()
+            if date_m:
+                current_entry["dates"] = date_m.group(0).strip()
+        elif current_entry is not None and is_bullet:
+            bullets.append(stripped)
+        elif current_entry is not None and title_m and "title" not in current_entry:
+            current_entry["title"] = title_m.group(0).strip()
+
         if len(entries) >= 8:
             break
-    return entries
+
+    if current_entry:
+        if bullets:
+            current_entry["description"] = " ".join(bullets[:3])
+        entries.append(current_entry)
+
+    return entries[:8]
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ const API = '/api';
 // ---- State ----
 let currentView = 'upload';
 let documents = [];
+let currentDocData = null;
 let selectedFile = null;
 let selectedDocType = null;
 let currentFilter = 'all';
@@ -249,6 +250,8 @@ async function handleUpload() {
     formData.append('file', selectedFile);
     formData.append('doc_type', selectedDocType);
 
+    let docId = null;
+
     try {
         const res = await fetch(`${API}/documents/upload`, {
             method: 'POST',
@@ -261,12 +264,16 @@ async function handleUpload() {
         }
 
         const doc = await res.json();
-        showToast(`"${doc.filename}" uploaded successfully`, 'success');
+        docId = doc.id;
 
-        // Auto-process
+        // Switch from generic spinner → pipeline tracker
         hideLoading();
-        showLoading('Running extraction pipeline…');
+        showPipelineTracker(doc.filename);
 
+        // Open SSE stream for real-time progress
+        const ssePromise = openProgressStream(doc.id);
+
+        // Trigger processing
         const processRes = await fetch(`${API}/documents/${doc.id}/process`, {
             method: 'POST',
         });
@@ -276,19 +283,145 @@ async function handleUpload() {
             throw new Error(err.detail || `Processing failed (${processRes.status})`);
         }
 
+        // Wait for SSE to finish (the "done" event)
+        await ssePromise;
+
         showToast('Document processed!', 'success');
         resetUploadState();
         await loadDocuments();
 
-        // Navigate to detail
+        // Brief pause so the user sees all steps completed, then navigate
+        await sleep(800);
+        hidePipelineTracker();
         window.location.hash = `#detail/${doc.id}`;
 
     } catch (err) {
         showToast(err.message, 'error');
+        hidePipelineTracker();
     } finally {
         isUploading = false;
         hideLoading();
     }
+}
+
+// ====================================================================
+// Pipeline Tracker
+// ====================================================================
+
+const PIPELINE_PHASES = ['upload', 'ingestion', 'preprocessing', 'extraction', 'mapping', 'validation'];
+
+let pipelineOverlay, pipelineSteps, pipelineFilename, pipelineStatusDetail, pipelineProgressDot;
+let activeEventSource = null;
+
+function _initTrackerRefs() {
+    if (pipelineOverlay) return;
+    pipelineOverlay = document.getElementById('pipeline-overlay');
+    pipelineSteps = document.getElementById('pipeline-steps');
+    pipelineFilename = document.getElementById('pipeline-filename');
+    pipelineStatusDetail = document.getElementById('pipeline-status-detail');
+    pipelineProgressDot = document.getElementById('pipeline-progress-dot');
+}
+
+function showPipelineTracker(filename) {
+    _initTrackerRefs();
+    pipelineFilename.textContent = filename;
+    pipelineStatusDetail.textContent = 'Preparing…';
+
+    // Reset all steps to pending
+    const steps = pipelineSteps.querySelectorAll('.pipeline-step');
+    steps.forEach(step => {
+        step.classList.remove('completed', 'active', 'failed');
+        step.classList.add('pending');
+    });
+
+    pipelineOverlay.style.display = 'flex';
+
+    // Trigger entry animation
+    requestAnimationFrame(() => {
+        pipelineOverlay.classList.add('visible');
+    });
+}
+
+function hidePipelineTracker() {
+    _initTrackerRefs();
+    pipelineOverlay.classList.remove('visible');
+    setTimeout(() => {
+        pipelineOverlay.style.display = 'none';
+    }, 400);
+
+    if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+    }
+}
+
+function updatePipelineStep(phase, status, detail) {
+    _initTrackerRefs();
+    const phaseIndex = PIPELINE_PHASES.indexOf(phase);
+    if (phaseIndex === -1 && phase !== 'done') return;
+
+    const steps = pipelineSteps.querySelectorAll('.pipeline-step');
+
+    if (phase === 'done') {
+        // Mark all steps completed
+        steps.forEach(step => {
+            step.classList.remove('active', 'pending', 'failed');
+            step.classList.add('completed');
+        });
+        pipelineStatusDetail.textContent = 'Complete!';
+        pipelineProgressDot.className = 'pipeline-status-dot completed';
+        return;
+    }
+
+    steps.forEach((step, i) => {
+        step.classList.remove('active', 'pending', 'completed', 'failed');
+        if (i < phaseIndex) {
+            step.classList.add('completed');
+        } else if (i === phaseIndex) {
+            step.classList.add(status === 'failed' ? 'failed' : 'active');
+        } else {
+            step.classList.add('pending');
+        }
+    });
+
+    // Update status bar
+    if (detail) {
+        pipelineStatusDetail.textContent = detail;
+    }
+    pipelineProgressDot.className = `pipeline-status-dot ${status === 'failed' ? 'failed' : 'active'}`;
+}
+
+function openProgressStream(docId) {
+    return new Promise((resolve) => {
+        // Small delay to ensure the SSE endpoint is ready
+        setTimeout(() => {
+            const es = new EventSource(`${API}/documents/${docId}/progress`);
+            activeEventSource = es;
+
+            es.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    updatePipelineStep(data.phase, data.status, data.detail);
+
+                    if (data.phase === 'done' || data.status === 'failed') {
+                        es.close();
+                        activeEventSource = null;
+                        resolve(data);
+                    }
+                } catch { /* ignore parse errors */ }
+            };
+
+            es.onerror = () => {
+                es.close();
+                activeEventSource = null;
+                resolve({ phase: 'done', status: 'completed' });
+            };
+        }, 100);
+    });
+}
+
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
 }
 
 async function loadDocuments() {
@@ -418,10 +551,15 @@ function renderDetail(doc) {
 
     // Extracted data
     const dataEl = document.getElementById('detail-extracted-data');
+    const editBtn = document.getElementById('btn-edit-data');
     if (doc.extracted_data && Object.keys(doc.extracted_data).length > 0) {
+        currentDocData = doc.extracted_data;
         dataEl.innerHTML = renderExtractedData(doc.extracted_data, doc.confidence_scores);
+        editBtn.style.display = 'inline-block';
     } else {
+        currentDocData = {};
         dataEl.innerHTML = '<p class="text-muted">No structured data extracted yet.</p>';
+        editBtn.style.display = 'inline-block';
     }
 
     // Approve button — only shown for needs_review docs
@@ -525,9 +663,43 @@ async function approveDocument(docId) {
     }
 }
 
-function downloadExport(docId, format) {
-    // Browser handles the download via Content-Disposition
-    window.location.href = `${API}/documents/${docId}/export?format=${format}`;
+async function downloadExport(docId, format) {
+    try {
+        const res = await fetch(`${API}/documents/${docId}/export?format=${format}`);
+        if (!res.ok) throw new Error(`Failed to export as ${format.toUpperCase()}`);
+        
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        
+        // Extract filename from Content-Disposition if available, or fallback
+        let filename = `export_${docId}.${format}`;
+        const cd = res.headers.get('Content-Disposition');
+        if (cd && cd.includes('filename=')) {
+            const matches = /filename="([^"]+)"/.exec(cd);
+            if (matches && matches[1]) {
+                filename = matches[1];
+            }
+        } else {
+            // Fallback: try to grab from the DOM
+            const domName = document.getElementById('detail-filename')?.textContent;
+            if (domName) {
+                filename = `${domName}.${format}`;
+            }
+        }
+        
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        
+        // Cleanup
+        window.URL.revokeObjectURL(url);
+        a.remove();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
 }
 
 function renderExtractedData(data, confidences) {
@@ -549,13 +721,24 @@ function renderExtractedData(data, confidences) {
                     return '<pre style="margin:0;font-size:0.82rem;">' +
                         escapeHtml(JSON.stringify(v, null, 2)) + '</pre>';
                 }
-                return escapeHtml(String(v));
+                const strV = String(v);
+                if (strV.startsWith('http://') || strV.startsWith('https://') || strV.startsWith('www.')) {
+                    const href = strV.startsWith('www.') ? 'https://' + strV : strV;
+                    return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(strV)}</a>`;
+                }
+                return escapeHtml(strV);
             }).join('<br>');
         } else if (typeof value === 'object' && value !== null) {
             displayValue = '<pre style="margin:0;font-size:0.82rem;">' +
                 escapeHtml(JSON.stringify(value, null, 2)) + '</pre>';
         } else {
-            displayValue = escapeHtml(String(value ?? '—'));
+            const strV = String(value ?? '—');
+            if (strV.startsWith('http://') || strV.startsWith('https://') || strV.startsWith('www.')) {
+                const href = strV.startsWith('www.') ? 'https://' + strV : strV;
+                displayValue = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(strV)}</a>`;
+            } else {
+                displayValue = escapeHtml(strV);
+            }
         }
 
         // Confidence bar
@@ -577,11 +760,64 @@ function renderExtractedData(data, confidences) {
 }
 
 // ====================================================================
+// Edit Data
+// ====================================================================
+
+function openEditModal() {
+    if (!currentDocData) return;
+    const textarea = document.getElementById('edit-json-textarea');
+    textarea.value = JSON.stringify(currentDocData, null, 2);
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('edit-modal').style.display = 'none';
+}
+
+async function saveEditedData() {
+    const textarea = document.getElementById('edit-json-textarea');
+    let newData;
+    try {
+        newData = JSON.parse(textarea.value);
+    } catch (e) {
+        showToast('Invalid JSON format. Please check for errors.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API}/documents/${currentDocId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                extracted_data: newData,
+                approve: true  // Saving edits automatically approves it
+            })
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save changes');
+        }
+
+        showToast('Data updated successfully', 'success');
+        closeEditModal();
+        await loadDocumentDetail(currentDocId);
+        await loadReviewQueue();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+// ====================================================================
 // Helpers
 // ====================================================================
 
 function formatDate(dateStr) {
     if (!dateStr) return '';
+    // Server returns UTC timestamps — ensure the browser knows they're UTC
+    if (dateStr && !dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('-', 10)) {
+        dateStr = dateStr + 'Z';
+    }
     const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) return '';
 
