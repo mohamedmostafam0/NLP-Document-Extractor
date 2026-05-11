@@ -25,3 +25,7 @@ transformers==4.45.2
 torch==2.4.1
 phonenumbers==8.13.45
 python-dateutil==2.9.0.post0
+
+# Tests + presentation
+pytest>=8.0
+python-pptx==1.0.2
