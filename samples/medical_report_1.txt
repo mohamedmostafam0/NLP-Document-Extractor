@@ -1,0 +1,24 @@
+MERCY GENERAL HOSPITAL - PATIENT ENCOUNTER REPORT
+
+Patient Name: Sarah Jenkins
+Date of Birth: 05/14/1982
+Date of Visit: October 12, 2025
+Provider: Dr. Gregory House, MD
+
+Vitals:
+BP: 120/80
+HR: 72 bpm
+Temp: 98.6 F
+Weight: 145 lbs
+
+Reason for Visit:
+Patient complains of persistent migraine and nausea over the past 3 days.
+
+Assessment & Diagnoses:
+1. Acute Migraine without aura
+2. Mild dehydration
+
+Medications Prescribed:
+- Sumatriptan 50mg tablets, take one at onset of migraine
+- Ibuprofen 400mg every 6 hours as needed
+- Zofran 4mg for nausea

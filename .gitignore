@@ -4,11 +4,31 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Environments
 .env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Database / Storage
 data/*.db
 data/*.sqlite
+
+# Logs
+*.log
+
+# Testing / Type Hinting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# IDEs / OS
 .vscode/
 .idea/
-*.log
-.pytest_cache/
 .claude/
+.DS_Store
+Thumbs.db

@@ -26,13 +26,57 @@
 
 Docxtract follows a decoupled service architecture orchestrated via Docker Compose:
 
-- **Frontend**: Vanilla HTML5, CSS3, and JavaScript interacting asynchronously with the REST API.
-- **Backend API**: FastAPI framework running on Python 3.11.
-- **Storage Layer**: MinIO (S3-compatible object storage) for staging raw uploaded files securely.
-- **Database Layer**: PostgreSQL (via SQLAlchemy ORM) to persist document metadata, structured extraction results, and human-review status.
-- **Extraction Engine**: 
-  - `tesseract-ocr` for Optical Character Recognition (OCR) of images/PDFs.
-  - `spaCy` (`en_core_web_sm`) and Hugging Face Transformers for NER token classification.
+```mermaid
+graph TD
+    User([User / Browser])
+    
+    subgraph "Docker Compose Network"
+        Frontend[Frontend UI<br/>Vanilla JS/CSS]
+        Backend[FastAPI Backend<br/>Python 3.11]
+        
+        subgraph "Data Storage"
+            MinIO[(MinIO Object Storage<br/>Raw Documents)]
+            DB[(PostgreSQL<br/>Structured Data & Metadata)]
+        end
+        
+        subgraph "Extraction Engine"
+            OCR[Tesseract OCR]
+            NER[spaCy & HuggingFace<br/>NER Engine]
+            Validation[Pydantic Schema<br/>Validation]
+        end
+    end
+
+    User -->|Uploads File & Views Status| Frontend
+    Frontend <-->|REST API & SSE stream| Backend
+    
+    Backend -->|Save raw file| MinIO
+    Backend -->|Persist state| DB
+    
+    Backend -->|1. Send image/PDF| OCR
+    OCR -->|2. Raw text| NER
+    NER -->|3. Extracted entities| Validation
+    Validation -->|4. Structured JSON| DB
+```
+
+### Document Processing Lifecycle
+
+The pipeline processes unstructured files synchronously and emits Server-Sent Events (SSE) so the frontend can display a real-time progress bar. Once extraction is finished, the document is either automatically completed or routed to humans for review.
+
+```mermaid
+stateDiagram-v2
+    [*] --> UPLOADED : User Uploads File
+    
+    UPLOADED --> STORAGE : Save to MinIO
+    STORAGE --> OCR : Extract Raw Text
+    OCR --> NLP_EXTRACTION : Map to Entities
+    NLP_EXTRACTION --> STRUCTURING : Validation
+    
+    STRUCTURING --> COMPLETED : All required fields present (High Confidence)
+    STRUCTURING --> NEEDS_REVIEW : Missing required fields / Low confidence
+    
+    NEEDS_REVIEW --> COMPLETED : Human manually edits & approves data
+    COMPLETED --> [*]
+```
 
 ---
 
@@ -88,12 +132,21 @@ If you prefer to run the application locally without Docker (e.g., for active de
 
 ---
 
-## 📄 Supported Document Types
+## 📄 Supported Document Types & Extraction Schemas
 
-Currently, the NLP pipeline is optimized with distinct heuristics and schemas for:
-1. **Resumes (`resume`)**: Extracts Name, Contact Info (Email/Phone), Location, Skills, Education, and Work Experience.
-2. **Business Cards (`business_card`)**: Extracts Name, Title, Company, Email, Phone, Address, and Website.
-3. **Medical Reports (`medical_report`)**: Extracts Patient Name, DOB, Visit Date, Provider, Diagnoses, Medications, and Vitals.
+If a document fails to extract any of its **Required Fields**, the pipeline will automatically flag its status as `needs_review` and route it to the "Review Queue" for manual human validation via the dashboard UI.
+
+### 1. Resumes (`resume`)
+- **Required**: `name`, `email`
+- **Optional**: `phone`, `location`, `education` (List), `experience` (List), `skills` (List)
+
+### 2. Business Cards (`business_card`)
+- **Required**: `name`, `email`
+- **Optional**: `title`, `company`, `phone`, `address`, `website`
+
+### 3. Medical Reports (`medical_report`)
+- **Required**: `patient_name`, `visit_date`
+- **Optional**: `date_of_birth`, `provider`, `diagnoses` (List), `medications` (List), `vitals` (Dictionary)
 
 ## 🤝 Contributing
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change. Ensure to update tests as appropriate.
